@@ -115,8 +115,11 @@ class MultiDatasetIterator(IterableDataset):
 
     def terminate(self):
         for job in self.jobs:
-            job.terminate()
-            time.sleep(1.0)
+            if job.is_alive():
+                job.terminate()
+
+        time.sleep(1.0)
+        for job in self.jobs:
             job.join()
 
     def __del__(self):

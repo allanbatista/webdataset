@@ -60,11 +60,22 @@ def wait(output_queue, prefetch):
         time.sleep(0.1)
 
 
-def _parallel_job(dataset, i, n, prefetch, output_queue):
+def to_device(sample, device):
+    if isinstance(sample, (list, tuple)):
+        return tuple(a.to(device, non_blocking=True) for a in sample)
+    else:
+        return {k: a.to(device, non_blocking=True) for k, a in sample.items()}
+
+
+def _parallel_job(dataset, i, n, prefetch, device, output_queue):
     D("job", i, "started")
     dataset.shard_selection = lambda x: x[i::n]
-    for sample in dataset:
-        output_queue.put(sample)
+    for cpu_sample in dataset:
+        if device is not None:
+            output_queue.put((cpu_sample, to_device(cpu_sample, device)))
+        else:
+            output_queue.put(cpu_sample)
+
         wait(output_queue, prefetch)
 
     D("job", i, "waiting")
@@ -76,17 +87,18 @@ def _parallel_job(dataset, i, n, prefetch, output_queue):
 
 class MultiDatasetIterator(IterableDataset):
     def __init__(
-        self, dataset=None, workers=4, output_size=100, pin_memory=True, prefetch=-1
+        self, dataset=None, workers=4, output_size=100, pin_memory=True, prefetch=-1, device=None
     ):
         IterableDataset.__init__(self)
         omp_warning()
         self.output_queue = mp.Queue(output_size)
         self.pin_memory = pin_memory
+        self.device = device
         self.jobs = []
         for i in range(workers):
             job = mp.Process(
                 target=_parallel_job,
-                args=(dataset, i, workers, prefetch, self.output_queue),
+                args=(dataset, i, workers, prefetch, device, self.output_queue),
                 daemon=True,
             )
             self.jobs.append(job)
@@ -101,7 +113,9 @@ class MultiDatasetIterator(IterableDataset):
             try:
                 result = self.output_queue.get(True, timeout=timeout)
                 assert isinstance(result, (tuple, list, dict))
-                result = copy_and_delete_tensors(result)
+                if self.device is None and self.pin_memory:
+                    result = copy_and_delete_tensors(result)
+
                 return result
             except queue.Empty:
                 D("queue empty")
@@ -145,7 +159,7 @@ class MultiDataset(IterableDataset, wds.Pipeline):
     """
 
     def __init__(
-        self, dataset, workers=4, output_size=10000, nominal=None, pin_memory=True, prefetch=-1
+        self, dataset, workers=4, output_size=10000, nominal=None, pin_memory=True, prefetch=-1, device=None,
     ):
         wds.Pipeline.__init__(self)
         D("dataset", dataset)
@@ -154,7 +168,8 @@ class MultiDataset(IterableDataset, wds.Pipeline):
             workers=workers,
             output_size=output_size,
             pin_memory=pin_memory,
-            prefetch=prefetch
+            prefetch=prefetch,
+            device=device
         )
         self.nominal = nominal
 

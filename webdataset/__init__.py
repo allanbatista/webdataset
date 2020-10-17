@@ -23,5 +23,5 @@ from .dataset import (
     all_urls
 )
 from .writer import ShardWriter, TarWriter
-from .multi import MultiDataset
+from .multi import MultiDataset, FasterMultiDataset
 from .autodecode import imagehandler, torch_video, torch_audio, Decoder, gzfilter

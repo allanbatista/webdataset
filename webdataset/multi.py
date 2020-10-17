@@ -177,51 +177,70 @@ def to_device(sample, device):
 
 
 def reader(loader):
-    for sample in loader.dataloader:
-        if loader.finished:
-            break
-        loader.queue.put(to_device(sample, loader.device))
-        del sample
-        # waiting
-        while (loader.queue.qsize() >= loader.prefetch_gpu) and not loader.finished:
-            time.sleep(0.1)
+    try:
+        for sample in loader.dataloader:
+            if loader.finished:
+                break
+            loader.queue.put(to_device(sample, loader.device))
+            del sample
+            # waiting
+            while (loader.queue.qsize() >= loader.prefetch_gpu) and not loader.finished:
+                time.sleep(0.1)
+    except Exception as e:
+        loader.exception = e
+    finally:
+        loader.finished = True
 
-    loader.finished = True
 
-
-class FasterMultiDataset:
-    def __init__(self, dataset, workers=4, output_size=10000, nominal=None, pin_memory=True, prefetch=-1, prefetch_gpu=2, device='cuda'):
-        self.dataloader = MultiDataset(dataset, workers=workers, output_size=output_size, nominal=nominal, pin_memory=pin_memory, prefetch=prefetch)
+class FasterMultiIterator:
+    def __init__(self, dataloader, prefetch_gpu=2, device='cuda'):
+        self.dataloader = dataloader
         self.queue = queue.Queue()
         self.finished = False
         self.device = device
         self.prefetch_gpu = prefetch_gpu
-
-    def __iter__(self):
-        self.finished = False
         self.thread = threading.Thread(target=reader, args=(self,))
         self.thread.start()
+        self.exception = None
 
-        try:
-            while not (self.finished and self.queue.empty()):
-                yield self.queue.get()
+    def __iter__(self):
+        return self
 
-            raise StopIteration()
-        finally:
-            self.terminate()
+    def __next__(self):
+        if self.exception is not None:
+            print("raise")
+            raise self.exception
 
-    def terminate(self):
-        print("finishing")
+        while True:
+            try:
+                return self.queue.get(True, timeout=0.1)
+            except queue.Empty:
+                if self.finished:
+                    raise StopIteration()
+
+    def __del__(self):
         self.finished = True
+
         while not self.queue.empty():
             self.queue.get_nowait()
-        print("clear queue")
 
         if self.thread.is_alive():
             self.thread.join()
-            print("finish reader thread")
 
         torch.cuda.empty_cache()
 
-    def __del__(self):
-        self.terminate()
+
+class FasterMultiDataset:
+    """
+    This class pre enqueue send batchs to GPU. Make it ready to be processed before step beginning.
+    """
+
+    def __init__(self, dataset, workers=4, output_size=10000,
+                 nominal=None, pin_memory=True, prefetch=-1,
+                 prefetch_gpu=2, device='cuda'):
+        self.dataloader = MultiDataset(dataset, workers, output_size, nominal, pin_memory, prefetch)
+        self.device = device
+        self.prefetch_gpu = prefetch_gpu
+
+    def __iter__(self):
+        return FasterMultiIterator(self.dataloader, prefetch_gpu=self.prefetch_gpu, device=self.device)

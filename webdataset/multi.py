@@ -171,9 +171,11 @@ class MultiDataset(IterableDataset, wds.Pipeline):
 
 def to_device(sample, device):
     if isinstance(sample, (list, tuple)):
-        return tuple(a.to(device, non_blocking=True) for a in sample)
+        return tuple(to_device(value, device) for value in sample)
+    elif isinstance(sample, (dict,)):
+        return {k: to_device(value, device) for k, value in sample.items()}
     else:
-        return {k: a.to(device, non_blocking=True) for k, a in sample.items()}
+        return sample.to(device, non_blocking=True)
 
 
 def reader(loader):
@@ -181,7 +183,11 @@ def reader(loader):
         for sample in loader.dataloader:
             if loader.finished:
                 break
-            loader.queue.put(to_device(sample, loader.device))
+            data = to_device(sample, loader.device)
+            if isinstance(sample, (list, tuple)):
+                loader.queue.put(data)
+            else:
+                loader.queue.put((data,))
             del sample
             # waiting
             while (loader.queue.qsize() >= loader.prefetch_gpu) and not loader.finished:

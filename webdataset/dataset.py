@@ -425,6 +425,7 @@ class Dataset(IterableDataset, SampleIterator):
         prepare_for_worker=True,
         initial_pipeline=None,
         shard_selection=worker_urls,
+        shard_shuffle=identity
     ):
         tarhandler = handler if tarhandler is None else tarhandler
         IterableDataset.__init__(self)
@@ -443,7 +444,7 @@ class Dataset(IterableDataset, SampleIterator):
         self.reseed_hook = do_nothing
         self.node_selection = identity
         self.shard_selection = shard_selection
-        self.shard_shuffle = identity
+        self.shard_shuffle = shard_shuffle
 
     def __len__(self):
         """Return the nominal length of the dataset."""
